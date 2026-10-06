@@ -1,0 +1,19 @@
+# LaTeX
+report/build/
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Python
+__pycache__/
+.venv/
+.ipynb_checkpoints/
+
+# Experiment outputs (keep the processed figures/results only)
+outputs/
+runs/

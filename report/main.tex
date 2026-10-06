@@ -1,0 +1,141 @@
+\documentclass[10pt,a4paper]{article}
+
+% Layout: the report must stay within 4 pages (penalty beyond).
+\usepackage[margin=2cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\usepackage[capitalize]{cleveref}
+
+\graphicspath{{figures/}}
+\setlength{\parskip}{0.3em}
+
+% Notation
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Qphi}{Q_{\phi}}
+\newcommand{\pith}{\pi_{\theta}}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\title{Overestimation Bias in DDPG and TD3 on LunarLander:\\ the Effect of Layer Normalization}
+\author{Théo Fontaine \and Théophile Lahaussois\\[0.3em]
+  \small Sorbonne Université -- M2 MIND -- UM5IN872 Reinforcement Learning\\
+  \small Code: \url{https://github.com/theofontainecs/Overestimation-bias-with-DDPG-and-TD3}}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\todo{3--4 sentences: question, setup (DDPG/TD3 $\times$ LayerNorm on LunarLanderContinuous, $N$ seeds), how bias is measured (Q vs.\ Monte Carlo returns), main quantitative findings.}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+\todo{Motivation: function approximation + max/greedy actor $\Rightarrow$ overestimation \citep{thrun1993issues,fujimoto2018td3}. TD3 counters it with clipped double-Q. Layer Normalization in the critic has been reported to stabilise off-policy learning. Research questions:}
+\begin{itemize}
+  \item[\textbf{Q1}] Does Layer Normalization in the critic reduce the overestimation bias of DDPG and TD3?
+  \item[\textbf{Q2}] How does the overestimation bias relate to performance (return)?
+\end{itemize}
+
+\section{Background}
+\label{sec:background}
+\paragraph{DDPG.} \citet{lillicrap2016ddpg}: deterministic actor $\pith$, critic $\Qphi$ trained on
+$y = r + \gamma (1-d)\, Q_{\phi'}(s', \pi_{\theta'}(s'))$, actor updated by $\nabla_\theta \E[\Qphi(s,\pith(s))]$.
+
+\paragraph{TD3.} \citet{fujimoto2018td3}: (i) clipped double-Q target
+$y = r + \gamma (1-d) \min_{i=1,2} Q_{\phi'_i}(s', \tilde a')$, (ii) target policy smoothing
+$\tilde a' = \pi_{\theta'}(s') + \mathrm{clip}(\epsilon, -c, c)$, (iii) delayed actor updates.
+
+\paragraph{Layer Normalization.} \citet{ba2016layernorm}: normalises pre-activations of each hidden layer over features.
+\todo{Where exactly it is inserted (critic only / actor too, before or after activation).}
+
+\paragraph{Measuring overestimation.} For a visited pair $(s_t,a_t)$, the bias is
+\begin{equation}
+  \Delta(s_t,a_t) = \Qphi(s_t,a_t) - G_t, \qquad G_t = \sum_{k\ge 0} \gamma^k r_{t+k},
+  \label{eq:bias}
+\end{equation}
+where $G_t$ is the discounted Monte Carlo return obtained by running the current policy from $(s_t,a_t)$.
+\todo{Precise protocol: evaluation episodes, deterministic policy, how truncation at the time limit is handled, normalisation by $|G_t|$ or not.}
+
+\section{Methodology}
+\label{sec:method}
+\paragraph{Environment.} \texttt{LunarLanderContinuous-v3} (Gymnasium) \todo{version, obs/action dims, time limit}.
+
+\paragraph{Implementation.} \todo{rl-mind / bbrl / SB3 / own code; hardware; wall-clock time.}
+
+\paragraph{Experimental design.} 2 algorithms $\times$ 2 critic variants (with / without LayerNorm)
+\todo{$\times$ optional factor: depth, UTD ratio, critic-to-actor ratio}, $N=\todo{10}$ seeds each,
+$\todo{T}$ environment steps. Evaluation every $\todo{k}$ steps on $\todo{m}$ episodes.
+
+\paragraph{Statistics.} \todo{Mean $\pm$ 95\% bootstrap CI over seeds; Welch t-test / Mann--Whitney on final return and final bias; aggregate metrics (IQM) \citep{agarwal2021rliable}.}
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{Hyper-parameters (shared by all runs unless stated otherwise).}
+  \label{tab:hparams}
+  \begin{tabular}{lcc}
+    \toprule
+    Parameter & DDPG & TD3 \\
+    \midrule
+    Hidden layers (actor / critic)   & \todo{} & \todo{} \\
+    Learning rate (actor / critic)   & \todo{} & \todo{} \\
+    Batch size                       & \todo{} & \todo{} \\
+    Replay buffer size               & \todo{} & \todo{} \\
+    Discount $\gamma$                & \todo{} & \todo{} \\
+    Target update $\tau$             & \todo{} & \todo{} \\
+    Exploration noise                & \todo{} & \todo{} \\
+    Policy delay / target noise $c$  & -- & \todo{} \\
+    Update-to-data ratio             & \todo{} & \todo{} \\
+    Learning starts                  & \todo{} & \todo{} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Performance}
+% Learning curves: x = env steps, y = evaluation return, mean + CI over seeds.
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=\linewidth]{learning_curves.pdf}
+  \fbox{\parbox[c][4cm][c]{0.9\linewidth}{\centering learning\_curves.pdf}}
+  \caption{\todo{Evaluation return vs.\ environment steps for the 4 configurations. Mean over $N$ seeds, shaded area: 95\% bootstrap CI.}}
+  \label{fig:curves}
+\end{figure}
+
+\subsection{Overestimation bias}
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=\linewidth]{bias.pdf}
+  \fbox{\parbox[c][4cm][c]{0.9\linewidth}{\centering bias.pdf}}
+  \caption{\todo{Bias $\Delta$ (Eq.~\ref{eq:bias}) vs.\ environment steps.}}
+  \label{fig:bias}
+\end{figure}
+
+\subsection{Bias vs.\ performance}
+\todo{Scatter of final bias vs.\ final return per seed, correlation coefficient.}
+
+\section{Discussion}
+\label{sec:discussion}
+\todo{Answer Q1 and Q2 with the statistics; limitations (number of seeds, single environment, MC estimate variance).}
+
+\section{Conclusion}
+\label{sec:conclusion}
+\todo{2--3 sentences.}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}
