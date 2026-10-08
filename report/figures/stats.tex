@@ -1,0 +1,21 @@
+\begin{tabular}{lccc}
+\toprule
+Configuration & $n$ & Final return [95\% CI] & Final bias [95\% CI] \\
+\midrule
+DDPG & 5 & -111.0 [-159.6, -63.8] & +274.1 [+203.5, +347.1] \\
+DDPG + LN & 5 & -144.1 [-194.0, -78.8] & +644.8 [+466.6, +834.1] \\
+TD3 & 5 & 134.6 [37.6, 210.6] & -7.8 [-18.0, +0.6] \\
+TD3 + LN & 5 & 74.2 [2.0, 141.1] & +3.9 [-6.5, +15.9] \\
+\midrule
+Comparison (A vs.\ B) & Metric & $\Delta$ (B $-$ A) & $p$ Welch / MWU \\
+\midrule
+DDPG vs.\ DDPG + LN & return & -33.1 & 0.468 / 0.548 \\
+DDPG vs.\ DDPG + LN & bias & +370.6 & 0.016 / 0.016 \\
+TD3 vs.\ TD3 + LN & return & -60.4 & 0.369 / 0.310 \\
+TD3 vs.\ TD3 + LN & bias & +11.7 & 0.202 / 0.310 \\
+DDPG vs.\ TD3 & return & +245.6 & 0.004 / 0.008 \\
+DDPG vs.\ TD3 & bias & -282.0 & 0.002 / 0.008 \\
+DDPG + LN vs.\ TD3 + LN & return & +218.3 & 0.003 / 0.016 \\
+DDPG + LN vs.\ TD3 + LN & bias & -640.9 & 0.003 / 0.008 \\
+\bottomrule
+\end{tabular}
