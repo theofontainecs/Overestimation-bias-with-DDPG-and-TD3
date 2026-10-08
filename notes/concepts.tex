@@ -1,0 +1,372 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.2cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[most]{tcolorbox}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\setlist{itemsep=0.15em,topsep=0.3em}
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{0pt}
+\setlength{\emergencystretch}{2em}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\slide}[2]{\textcolor{gray}{[\,\code{#1}, slide #2\,]}}
+
+\newtcolorbox{codebox}{colback=blue!3,colframe=blue!40!black,boxrule=0.4pt,arc=1pt,
+  left=4pt,right=4pt,top=2pt,bottom=2pt,fonttitle=\bfseries\small,title=Dans le code}
+\newtcolorbox{keybox}{colback=orange!4,colframe=orange!60!black,boxrule=0.4pt,arc=1pt,
+  left=4pt,right=4pt,top=2pt,bottom=2pt,fonttitle=\bfseries\small,title=À retenir}
+
+\title{Mini-projet 1 -- Notes de fond\\\large Biais de surestimation, TD3 et Layer Normalization}
+\author{Notes personnelles (non rendues) -- Théo Fontaine}
+\date{Octobre 2026}
+
+\begin{document}
+\maketitle
+
+\noindent Ces notes supposent le cours lu. Elles ne réexpliquent pas les MDP, Bellman, DQN ou DDPG :
+elles renvoient aux slides (dossier \code{RL/}) et approfondissent seulement ce que le projet utilise
+au-delà du cours. Les renvois \slide{ddpg.pdf}{n} désignent
+\code{2 - DQN, DDPG et TD3/Slides/02 - DDPG and TD3 - slides.pdf}, \code{maxQ.pdf} et
+\code{sac\_to\_rlpd.pdf} sont dans \code{5 - Leveraging data/Slides/}.
+
+\tableofcontents
+
+% =====================================================================
+\section{Rappel express : DDPG et TD3 dans la notation du cours}
+
+On note $Q_\phi$ pour $\hat Q^{\pi_\theta}_\phi$ (le critique), $\pi_\theta$ l'acteur déterministe,
+$\bar\phi$ et $\bar\theta$ les paramètres des réseaux cibles, $d$ l'indicateur « $s'$ est terminal ».
+
+\paragraph{DDPG} \slide{ddpg.pdf}{7, 9, 10}. Critique régressé sur
+$y = r + \gamma(1-d)\,Q_{\bar\phi}(s', \pi_{\bar\theta}(s'))$, acteur mis à jour par le gradient
+déterministe $\nabla_\theta \E_s[Q_\phi(s,\pi_\theta(s))]$ \citep{silver2014dpg}, cibles mises à jour
+en douceur : $\bar\phi \leftarrow \tau\phi + (1-\tau)\bar\phi$.
+
+\paragraph{TD3} \slide{ddpg.pdf}{16, 17}. Trois modifications \citep{fujimoto2018td3} :
+\begin{align}
+  \tilde a' &= \mathrm{clip}\big(\pi_{\bar\theta}(s') + \mathrm{clip}(\epsilon,-c,c),\,-1,\,1\big),
+     \quad \epsilon\sim\mathcal N(0,\sigma^2) && \text{(lissage de la politique cible)}\\
+  y &= r + \gamma(1-d)\min_{i=1,2} Q_{\bar\phi_i}(s', \tilde a') && \text{(clipped double-Q)}\\
+  L(\phi_i) &= \E\big[(Q_{\phi_i}(s,a) - y)^2\big],\ i=1,2 && \text{(les deux critiques, même cible)}
+\end{align}
+et l'acteur (qui maximise $Q_{\phi_1}$) ainsi que les trois cibles ne sont mis à jour qu'une fois
+tous les \code{policy\_delay} pas de gradient du critique.
+
+\begin{codebox}
+\begin{tabular}{@{}ll@{}}
+  éq.~1--3, acteur, délai, soft update & \code{1\_implementation.ipynb}, §3 (\code{Agent.update}) \\
+  réseau avec ou sans LayerNorm & \code{1\_implementation.ipynb}, §2 (\code{mlp}, \code{Critic}) \\
+  retours Monte Carlo, biais & \code{1\_implementation.ipynb}, §4 (\code{evaluate}) \\
+  courbes, IC, tests & \code{2\_analysis.ipynb}
+\end{tabular}
+\end{codebox}
+
+\paragraph{Un seul code pour DDPG et TD3.} Dans le projet, DDPG est \emph{TD3 avec les trois
+mécanismes désactivés} : un seul critique, \code{policy\_delay = 1}, pas de bruit sur la politique
+cible. On garde un acteur cible dans les deux cas (comme le DDPG original et le « Our DDPG » de
+Fujimoto et al.). Ainsi, la seule différence entre les deux algorithmes est exactement ce qu'on
+étudie, et tout le reste (réseaux, optimiseur, buffer, évaluation) est identique. Attention : le
+notebook du cours utilise $\pi_\theta(s')$ (acteur courant) dans la cible de DDPG ; c'est un choix
+légitime mais différent, à mentionner dans le rapport.
+
+% =====================================================================
+\section{Le biais de surestimation en profondeur}
+
+\subsection{L'origine : maximiser des estimations bruitées}
+Le cours l'affirme \slide{ddpg.pdf}{15} ; voici pourquoi. Supposons que le critique estime sans biais
+chaque valeur, $\hat Q(s,a) = Q(s,a) + e_a$ avec $\E[e_a]=0$. Comme $\max$ est une fonction convexe,
+l'inégalité de Jensen donne
+\begin{equation}
+  \E\Big[\max_a \hat Q(s,a)\Big] \;\ge\; \max_a \E\big[\hat Q(s,a)\big] = \max_a Q(s,a).
+\end{equation}
+Le maximum d'estimations non biaisées est biaisé vers le haut : on sélectionne préférentiellement
+les actions dont l'erreur est positive \citep{thrun1993issues}.
+
+\textbf{Exemple chiffré.} Deux actions de vraie valeur $0$, erreurs indépendantes
+$e_a\sim\mathcal N(0,\sigma^2)$ : $\E[\max(e_1,e_2)] = \sigma/\sqrt\pi \approx 0{,}56\,\sigma$.
+Avec $m$ actions, le biais croît comme $\sigma\sqrt{2\ln m}$ : plus il y a de choix, pire c'est.
+
+\textbf{Et en actions continues ?} DDPG ne calcule pas de $\max$ explicite, mais l'acteur fait une
+montée de gradient sur $Q_\phi$ : il cherche $\arg\max_a Q_\phi(s,a)$ \slide{maxQ.pdf}{4, 10}. Il va
+donc précisément là où l'erreur du critique est positive. Fujimoto et al. montrent que le biais
+existe bien dans ce cadre (leur section 4.1) : c'est le même mécanisme, avec une optimisation
+approchée à la place du $\max$.
+
+\subsection{La propagation : le bootstrap transforme une erreur locale en erreur globale}
+Le biais ne reste pas local : la cible $y$ contient $Q_{\bar\phi}(s',\cdot)$, donc la surestimation
+en $s'$ est régressée dans $Q(s,a)$, puis dans les prédécesseurs de $s$, etc. Si chaque backup ajoute
+un biais $\varepsilon$, au point fixe
+\begin{equation}
+  \hat Q = r + \gamma(\hat Q' + \varepsilon) \quad\Longrightarrow\quad
+  \text{biais accumulé} \approx \frac{\varepsilon}{1-\gamma} = 100\,\varepsilon \text{ pour } \gamma=0{,}99.
+\end{equation}
+S'y ajoute une boucle avec l'acteur : il est attiré par les zones surestimées, on y collecte des
+données, mais le critique y généralise mal… Le cours décrit ce \emph{cercle vicieux} pour le RL
+offline \slide{sac\_to\_rlpd.pdf}{30} ; en ligne, il est atténué parce qu'on finit par échantillonner
+les actions surestimées, ce qui corrige le critique.
+
+\begin{center}
+\begin{tikzpicture}[node distance=2.6cm, every node/.style={draw, rounded corners, align=center,
+  font=\small, minimum height=0.9cm}, >={Stealth}]
+  \node (err) {erreur positive\\de $Q_\phi$ en $(s,a)$};
+  \node (act) [right=of err] {l'acteur se\\déplace vers $a$};
+  \node (tgt) [right=of act] {$y$ contient la\\surestimation};
+  \draw[->] (err) -- (act);
+  \draw[->] (act) -- (tgt);
+  \draw[->] (tgt) to[bend left=18] node[draw=none, below, font=\footnotesize] {régression du critique : l'erreur grossit} (err);
+\end{tikzpicture}
+\end{center}
+
+\subsection{Double Q-learning : découpler sélection et évaluation}
+L'idée de \citet{vanhasselt2010double} : si l'action est \emph{choisie} avec un estimateur et
+\emph{évaluée} avec un autre dont les erreurs sont indépendantes, le biais de sélection disparaît.
+DQN $\to$ Double DQN le fait avec le réseau cible. Dans DDPG, l'acteur choisit et le critique cible
+évalue, ce qui ressemble à un découplage, mais le critique cible est une moyenne glissante très
+lente du critique courant ($\tau=0{,}005$) : leurs erreurs sont presque identiques, donc le
+découplage est inefficace. C'est la motivation directe des deux critiques de TD3.
+
+% =====================================================================
+\section{TD3 vu par ce projet}
+
+\paragraph{Clipped double-Q : échanger surestimation contre sous-estimation.} Avec deux estimateurs
+$Q + e_1$ et $Q + e_2$, prendre le $\min$ biaise vers le bas : avec des erreurs gaussiennes
+indépendantes, $\E[\min(e_1,e_2)] = -\sigma/\sqrt\pi$. TD3 assume ce choix : une valeur
+\emph{sous-estimée} n'est pas recherchée par l'acteur, donc elle ne se propage pas de la même façon
+qu'une surestimation. Le cours signale que la sous-estimation existe bien \slide{ddpg.pdf}{18}, et
+RLPD note qu'un seul critique suffit parfois \slide{sac\_to\_rlpd.pdf}{49}. Dans nos mesures, il faut
+donc s'attendre à un biais \textbf{proche de zéro, voire négatif} pour TD3.
+
+\paragraph{Lissage de la politique cible : régularisation dans l'espace des actions.} En moyennant
+$Q_{\bar\phi}$ sur un petit voisinage de $\pi_{\bar\theta}(s')$, la cible ne peut plus exploiter un
+pic étroit d'erreur du critique. Conséquence subtile pour la mesure : le critique de TD3 estime
+alors la valeur de la politique \emph{bruitée}, pas exactement celle de $\pi_\theta$. Avec un bruit
+de $0{,}2$, l'écart est faible, mais il vaut la peine de le mentionner.
+
+\paragraph{Mises à jour retardées.} L'acteur maximise $Q_{\phi_1}$ : si on le met à jour alors que
+le critique est encore très faux, il suit l'erreur. Attendre \code{policy\_delay} pas de critique
+réduit la variance de la cible et laisse l'erreur diminuer. Le paramètre est le
+\emph{critic-to-actor ratio} de l'énoncé.
+
+\begin{keybox}
+Prédiction testable : biais(DDPG) $>$ biais(TD3), surtout tôt dans l'apprentissage. Si tes mesures
+ne montrent pas ça, suspecte d'abord un bug (dans la cible ou dans la mesure) avant de conclure.
+\end{keybox}
+
+% =====================================================================
+\section{Layer Normalization}
+
+\subsection{Définition}
+Pour un vecteur de pré-activations $h\in\mathbb R^d$ d'\emph{un} échantillon \citep{ba2016layernorm} :
+\begin{equation}
+  \mu = \frac1d\sum_{j=1}^d h_j,\qquad \sigma^2 = \frac1d\sum_{j=1}^d (h_j-\mu)^2,\qquad
+  \mathrm{LN}(h) = \gamma\odot\frac{h-\mu}{\sqrt{\sigma^2+\epsilon}} + \beta,
+\end{equation}
+avec $\gamma,\beta\in\mathbb R^d$ appris (initialisés à $1$ et $0$). En PyTorch :
+\code{nn.LayerNorm(d)}.
+
+\paragraph{LN vs BatchNorm.} BatchNorm \citep{ioffe2015batchnorm} normalise chaque neurone sur le
+\emph{batch} : la sortie pour un échantillon dépend des autres, et le comportement diffère entre
+entraînement (statistiques du batch) et inférence (moyennes glissantes). En RL off-policy c'est
+problématique : on évalue $Q(s,a)$ sur les données du buffer, $Q(s',\tilde a')$ sur des actions qui
+n'y sont pas, et le critique cible est une copie avec d'autres statistiques. CrossQ
+\citep{bhatt2024crossq} y arrive, mais avec des précautions spécifiques. LayerNorm normalise
+\emph{chaque échantillon indépendamment}, n'a pas d'état, et se comporte pareil partout : il
+s'insère sans précaution dans un critique. Le cours évoque d'ailleurs des résultats non concluants de
+BatchNorm dans DDPG \slide{ddpg.pdf}{5}.
+
+\subsection{Pourquoi LN limite la surestimation}
+Le cours le présente comme une recette de RLPD \slide{sac\_to\_rlpd.pdf}{40, 45--47} : « sans
+LayerNorm, les Q-values sont surestimées ». L'argument de \citet{ball2023rlpd} est une
+\textbf{borne}. Notons $\varphi(s,a) = \mathrm{ReLU}(\mathrm{LN}(z))$ la dernière couche cachée et
+$Q = w^\top\varphi + b$. Le vecteur normalisé $(z-\mu)/\sigma$ a toujours une norme $\sqrt d$, et
+ReLU ne fait que diminuer la norme, donc
+\begin{equation}
+  |Q_\phi(s,a)| \;\le\; \|w\|_2\,\big(\|\gamma\|_\infty\sqrt d + \|\beta\|_2\big) + |b|
+  \qquad\text{pour \emph{toute} entrée }(s,a).
+\end{equation}
+La valeur maximale du critique est contrôlée par les poids, pas par l'entrée. À l'inverse, un MLP
+ReLU sans normalisation est linéaire par morceaux : loin des données, il \emph{extrapole
+linéairement}, et peut produire des valeurs arbitrairement grandes que l'acteur s'empressera
+d'exploiter. LN empêche cette extrapolation catastrophique hors distribution
+\slide{sac\_to\_rlpd.pdf}{46}.
+
+\paragraph{Les autres effets connus.}
+\begin{itemize}
+  \item \textbf{Plasticité} : les réseaux entraînés sur des cibles non stationnaires perdent
+    progressivement leur capacité à apprendre. LN fait partie des remèdes les plus efficaces
+    \citep{lyle2024plasticity}.
+  \item \textbf{Passage à l'échelle} : BRO \citep{nauman2024bro} et SimBa \citep{lee2025simba}
+    utilisent LN pour entraîner de gros critiques et des UTD élevés.
+  \item \textbf{UTD élevé} : DroQ \citep{hiraoka2022droq} combine dropout et LayerNorm
+    \slide{sac\_to\_rlpd.pdf}{11}.
+\end{itemize}
+
+\paragraph{Ce qu'on peut s'attendre à voir sur LunarLander.} Les actions sont bornées par le
+$\tanh$ de l'acteur, donc l'extrapolation hors distribution dans l'espace des actions est limitée :
+l'effet de LN peut être plus faible que dans les benchmarks de RLPD. C'est précisément une question
+empirique, et un résultat « LN ne change pas grand-chose ici » est un résultat valable s'il est
+statistiquement établi.
+
+\begin{codebox}
+LN est inséré dans chaque bloc caché du \textbf{critique seulement} :
+\code{Linear} $\to$ \code{LayerNorm} $\to$ \code{ReLU}, rien après la couche de sortie.
+Switch : \code{layernorm} de \code{Config} ; implémenté dans \code{mlp}
+(\code{1\_implementation.ipynb}, §2).
+\end{codebox}
+
+% =====================================================================
+\section{Mesurer le biais}
+
+\subsection{Le principe}
+On compare la valeur prédite à la valeur réelle de la politique. On fait tourner la politique
+\emph{déterministe} $\pi_\theta$ (sans bruit d'exploration) et, pour chaque pas $t$ d'un épisode de
+longueur $T$, on calcule le retour Monte Carlo actualisé
+\begin{equation}
+  G_t = \sum_{k=0}^{T-t-1}\gamma^k\, r_{t+k+1}, \qquad\text{récursivement : } G_{T-1} = r_T,\
+  G_t = r_{t+1} + \gamma\, G_{t+1},
+\end{equation}
+qui est un estimateur sans biais de $Q^{\pi}(s_t,a_t)$. On le compare à $Q_{\phi_1}(s_t,a_t)$ (le
+critique que l'acteur maximise).
+
+\textbf{Piège classique :} $Q$ est une quantité \emph{actualisée}. On la compare à $G_t$, pas au
+retour d'épisode non actualisé affiché par l'évaluateur (de l'ordre de $+200$ pour un atterrissage
+réussi, alors que $G_0$ avec $\gamma=0{,}99$ est bien plus petit).
+
+\subsection{Normalisation}
+Comme l'échelle des retours change au cours de l'apprentissage, on suit \citet{chen2021redq} :
+\begin{equation}
+  \text{biais normalisé} = \frac{Q_{\phi_1}(s_t,a_t) - G_t}{\big|\,\E_{t}[G_t]\,\big|}.
+\end{equation}
+On en rapporte la \textbf{moyenne} (le biais : surestimation si $>0$) et l'\textbf{écart-type}
+(la dispersion de l'erreur, qui pénalise aussi la politique). On garde aussi le biais brut
+$\E[Q - G]$, plus facile à interpréter physiquement.
+
+\subsection{Troncature}
+LunarLander tronque les épisodes à $1000$ pas. Si un épisode est \emph{tronqué} (et non terminé), le
+$G_t$ calculé ignore tout ce qui se passe après $T$, alors que $Q$ en tient compte : les derniers
+$G_t$ sont faux. La queue manquante pèse $\gamma^{T-t}$. On ne garde donc que les pas où elle est
+négligeable :
+\begin{equation}
+  t < T - H \quad\text{avec}\quad \gamma^H \le \text{tol}
+  \;\Longleftrightarrow\; H = \Big\lceil \frac{\ln \text{tol}}{\ln\gamma}\Big\rceil
+  \qquad (\gamma=0{,}99,\ \text{tol}=0{,}01 \Rightarrow H = 459).
+\end{equation}
+Si l'épisode est \emph{terminé} (crash ou atterrissage), la valeur après $T$ est réellement nulle et
+tous les pas sont valides. C'est exactement la distinction \code{terminated}/\code{truncated} du
+notebook du cours, appliquée à la mesure.
+
+\subsection{Limites à discuter dans le rapport}
+\begin{itemize}
+  \item On mesure le biais sur la distribution d'états de $\pi_\theta$, depuis les états initiaux,
+    et non sur des états tirés du buffer (cela demanderait de réinitialiser l'environnement dans un
+    état arbitraire).
+  \item $G_t$ est un estimateur bruité (états initiaux et terrain aléatoires) : on moyenne sur
+    plusieurs épisodes et sur les seeds.
+\end{itemize}
+
+\begin{codebox}
+\code{1\_implementation.ipynb}, §4 : \code{discounted\_returns} (récursion ci-dessus),
+\code{valid\_length} (troncature), et \code{evaluate}, qui fait les rollouts et calcule le biais
+normalisé.
+\end{codebox}
+
+% =====================================================================
+\section{Les autres hyper-paramètres mentionnés par l'énoncé}
+
+\begin{description}
+  \item[UTD ratio (update-to-data).] Nombre de pas de gradient par transition collectée
+    \slide{sac\_to\_rlpd.pdf}{9--10, 48}. Plus d'updates = meilleure efficacité en échantillons, mais
+    plus de surapprentissage du buffer et plus de surestimation \citep{li2023overfitting} : chaque
+    pas de gradient refait un backup biaisé. Prédiction : le biais augmente avec l'UTD, et LN
+    devrait aider davantage à UTD élevé.
+  \item[Critic-to-actor ratio.] C'est \code{policy\_delay} de TD3 (section 3).
+  \item[Profondeur (2 ou 3 couches cachées).] Plus de capacité, mais des réseaux plus profonds non
+    normalisés sont plus instables ; c'est le cas où LN est censé le plus aider (BRO, SimBa).
+\end{description}
+Conseil de l'énoncé : « a small accurate study is better than a large inaccurate one ». On fait
+d'abord la grille principale (DDPG/TD3 $\times$ LN) proprement, et un facteur supplémentaire
+seulement si le temps de calcul le permet.
+
+% =====================================================================
+\section{Méthodologie expérimentale}
+
+\paragraph{Pourquoi plusieurs seeds.} En deep RL, deux runs d'un même algorithme avec des seeds
+différentes peuvent différer plus que deux algorithmes différents \citep{henderson2018matters}. Une
+courbe sur une seed ne prouve rien. Les seeds fixent tout : initialisation des réseaux, bruit
+d'exploration, environnements. On rapporte toujours une statistique \emph{sur les seeds} : chaque
+seed est \emph{un} échantillon, et les épisodes d'évaluation d'une même seed n'en sont pas des
+indépendants.
+
+\paragraph{Combien de seeds.} \citet{colas2018seeds} (dont l'auteur est notre enseignant) étudient la
+puissance statistique : avec 5 seeds, on ne détecte de façon fiable que des différences
+importantes. 5 est un minimum, 10 c'est mieux si le calcul le permet. Il faut dire dans le rapport
+qu'un test non significatif avec peu de seeds ne prouve pas l'absence d'effet.
+
+\paragraph{Intervalles de confiance par bootstrap.} Pour une configuration et un instant donnés, on a
+$n$ valeurs (une par seed). On les rééchantillonne avec remise $B$ fois (ex. $B=10\,000$), on calcule
+la moyenne de chaque rééchantillon, et l'IC à 95\,\% est donné par les percentiles 2,5 et 97,5 de ces
+moyennes. Aucune hypothèse de normalité. C'est ce que tracera \code{scripts/analyze.py} autour des
+courbes moyennes.
+
+\paragraph{Tests.} Pour comparer deux configurations sur une métrique finale (retour, biais) :
+\begin{itemize}
+  \item \textbf{t-test de Welch} : compare les moyennes sans supposer des variances égales.
+    Il suppose une distribution à peu près normale, ce qui est discutable avec 5 points.
+  \item \textbf{Mann--Whitney U} : non paramétrique, basé sur les rangs, plus robuste aux valeurs
+    aberrantes (un run qui diverge).
+\end{itemize}
+\citet{colas2019hitchhiker} discutent ces choix en détail. On rapporte la $p$-value \emph{et} la
+taille d'effet (différence des moyennes avec son IC), et on fixe $\alpha=0{,}05$ \emph{avant} de
+regarder les résultats. Avec plusieurs comparaisons, certaines sortiront significatives par hasard
+(correction de Bonferroni : $\alpha/k$ pour $k$ tests). \citet{agarwal2021rliable} proposent des
+agrégats robustes (moyenne interquartile, IQM), utiles quand les seeds sont très dispersées.
+
+\paragraph{Le lien biais $\leftrightarrow$ performance (Q2).} Pour chaque run, on trace le biais
+moyen contre le retour final, une couleur par configuration, et on calcule une corrélation (Pearson
+ou Spearman) avec sa $p$-value. Attention : corrélation n'est pas causalité. Un agent qui ne sait pas
+atterrir a aussi des retours faibles qui changent l'échelle du biais.
+
+\paragraph{La figure checklist du cours} (\code{0 - Généralités/01 - The figure checklist.pdf}). Chaque
+figure doit avoir :
+\begin{itemize}
+  \item un titre et une légende autonome, qui dit ce qu'il faut retenir ;
+  \item des axes avec labels et échelles ;
+  \item si c'est une moyenne, sa variabilité, avec sa nature précisée dans la légende (ici : IC
+    bootstrap à 95\,\% sur $n$ seeds) ;
+  \item le code couleur s'il y en a un ;
+  \item les résultats des tests statistiques dans la figure ou la légende ;
+  \item un numéro, et une mention dans le texte.
+\end{itemize}
+
+% =====================================================================
+\section{Glossaire}
+\begin{description}[style=nextline, leftmargin=1.5em]
+  \item[Bootstrap (en TD)] Utiliser sa propre estimation $Q(s',\cdot)$ dans la cible. Rien à voir
+    avec le bootstrap statistique de la section 7, homonyme malheureux.
+  \item[Biais de surestimation] $\E[Q_\phi(s,a)] - Q^\pi(s,a) > 0$, mesuré ici par $Q - G$.
+  \item[Clipped double-Q] Cible calculée avec le minimum de deux critiques cibles.
+  \item[Hors distribution (OOD)] Paire $(s,a)$ éloignée des données d'entraînement du critique.
+  \item[Plasticité] Capacité d'un réseau à continuer d'apprendre de nouvelles cibles.
+  \item[Terminated / truncated] Fin réelle de l'épisode (valeur future nulle) / coupure par limite de
+    temps (on bootstrape ; dans la mesure MC, la queue manque).
+  \item[UTD ratio] Pas de gradient par pas d'environnement.
+\end{description}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

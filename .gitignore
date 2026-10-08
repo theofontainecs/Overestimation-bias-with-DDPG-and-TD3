@@ -14,6 +14,6 @@ __pycache__/
 .venv/
 .ipynb_checkpoints/
 
-# Experiment outputs (keep the processed figures/results only)
-outputs/
-runs/
+# Experiment outputs: runs/*/seed*/metrics.json are kept (small), the sanity run is not
+runs_quick/
+notes/build/

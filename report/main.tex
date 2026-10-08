@@ -56,48 +56,40 @@ $y = r + \gamma (1-d)\, Q_{\phi'}(s', \pi_{\theta'}(s'))$, actor updated by $\na
 $y = r + \gamma (1-d) \min_{i=1,2} Q_{\phi'_i}(s', \tilde a')$, (ii) target policy smoothing
 $\tilde a' = \pi_{\theta'}(s') + \mathrm{clip}(\epsilon, -c, c)$, (iii) delayed actor updates.
 
-\paragraph{Layer Normalization.} \citet{ba2016layernorm}: normalises pre-activations of each hidden layer over features.
-\todo{Where exactly it is inserted (critic only / actor too, before or after activation).}
+\paragraph{Layer Normalization.} \citet{ba2016layernorm} normalise the pre-activations of a layer over its features, per sample, followed by a learned affine map. We insert it after every hidden linear layer of the critic(s), before the ReLU (\texttt{Linear} $\to$ \texttt{LayerNorm} $\to$ \texttt{ReLU}), and nowhere else; the actor is never normalised.
 
-\paragraph{Measuring overestimation.} For a visited pair $(s_t,a_t)$, the bias is
+\paragraph{Measuring overestimation.} At each evaluation we run the deterministic policy $\pith$ for 10 episodes and, for every visited pair $(s_t,a_t)$, compare the critic $Q_{\phi_1}$ (the one the actor maximises) with the discounted Monte Carlo return $G_t$, an unbiased estimate of $Q^{\pith}(s_t,a_t)$. We report the mean bias over the $N$ retained pairs, in (discounted) reward units:
 \begin{equation}
-  \Delta(s_t,a_t) = \Qphi(s_t,a_t) - G_t, \qquad G_t = \sum_{k\ge 0} \gamma^k r_{t+k},
+  \delta = \frac{1}{N}\sum_{t} \big(Q_{\phi_1}(s_t,a_t) - G_t\big), \qquad
+  G_t = \sum_{k=0}^{T-t-1} \gamma^k r_{t+k+1},
   \label{eq:bias}
 \end{equation}
-where $G_t$ is the discounted Monte Carlo return obtained by running the current policy from $(s_t,a_t)$.
-\todo{Precise protocol: evaluation episodes, deterministic policy, how truncation at the time limit is handled, normalisation by $|G_t|$ or not.}
+positive values meaning overestimation. We do not use the normalised bias of \citet{chen2021redq}, which divides by $|\frac1N\sum_t G_t|$: on LunarLander, returns go from negative to positive during learning, and this denominator crosses zero. Episodes truncated by the 1000-step time limit lack the tail of $G_t$, of weight $\gamma^{T-t}$: for them we drop the last $H=\lceil \ln 0.01/\ln\gamma\rceil = 459$ steps, so that the missing tail weighs less than $1\%$. Terminated episodes (landing or crash) are used entirely.
 
 \section{Methodology}
 \label{sec:method}
-\paragraph{Environment.} \texttt{LunarLanderContinuous-v3} (Gymnasium) \todo{version, obs/action dims, time limit}.
+\paragraph{Environment.} \texttt{LunarLanderContinuous-v3} (Gymnasium 1.4): 8-dimensional observations, 2-dimensional actions in $[-1,1]^2$, episodes truncated at 1000 steps; a return of 200 is considered solved.
 
-\paragraph{Implementation.} \todo{rl-mind / bbrl / SB3 / own code; hardware; wall-clock time.}
+\paragraph{Implementation.} Our own PyTorch implementation, built on the \texttt{rl-mind} toolkit of the course (environments, replay buffer, collector). DDPG is implemented as TD3 with its three mechanisms switched off (one critic, no target policy smoothing, actor updated at every step); both keep a target actor, as in \citet{fujimoto2018td3}'s DDPG baseline. All other details are shared. Runs were performed on a laptop CPU (Intel i5-10210U), 4 runs in parallel with one thread each, about \todo{35} minutes per run.
 
-\paragraph{Experimental design.} 2 algorithms $\times$ 2 critic variants (with / without LayerNorm)
-\todo{$\times$ optional factor: depth, UTD ratio, critic-to-actor ratio}, $N=\todo{10}$ seeds each,
-$\todo{T}$ environment steps. Evaluation every $\todo{k}$ steps on $\todo{m}$ episodes.
+\paragraph{Experimental design.} $2\times 2$ factorial design: \{DDPG, TD3\} $\times$ \{critic without / with LayerNorm\}, 5 seeds per configuration (20 runs), $10^5$ environment steps per run. Every 5000 steps, the deterministic policy is evaluated on 10 episodes (fixed initial-state seeds per run), which give both the evaluation return and the bias of \cref{eq:bias}. Hyper-parameters (\cref{tab:hparams}) are the standard TD3 ones and were not tuned.
 
-\paragraph{Statistics.} \todo{Mean $\pm$ 95\% bootstrap CI over seeds; Welch t-test / Mann--Whitney on final return and final bias; aggregate metrics (IQM) \citep{agarwal2021rliable}.}
+\paragraph{Statistics.} Curves show the mean over seeds and a 95\% percentile bootstrap confidence interval (10\,000 resamplings of the seeds). The \emph{final} value of a run is the mean of its last 3 evaluations (90k--100k steps); configurations are compared on these per-seed values with Welch's t-test and the Mann--Whitney U test \citep{colas2019hitchhiker}, at $\alpha = 0.05$. The relation between bias and return is measured by Spearman's rank correlation over runs.
 
 \begin{table}[h]
   \centering
   \small
-  \caption{Hyper-parameters (shared by all runs unless stated otherwise).}
+  \caption{Hyper-parameters, shared by all runs; the last row applies to TD3 only.}
   \label{tab:hparams}
-  \begin{tabular}{lcc}
+  \begin{tabular}{ll}
     \toprule
-    Parameter & DDPG & TD3 \\
-    \midrule
-    Hidden layers (actor / critic)   & \todo{} & \todo{} \\
-    Learning rate (actor / critic)   & \todo{} & \todo{} \\
-    Batch size                       & \todo{} & \todo{} \\
-    Replay buffer size               & \todo{} & \todo{} \\
-    Discount $\gamma$                & \todo{} & \todo{} \\
-    Target update $\tau$             & \todo{} & \todo{} \\
-    Exploration noise                & \todo{} & \todo{} \\
-    Policy delay / target noise $c$  & -- & \todo{} \\
-    Update-to-data ratio             & \todo{} & \todo{} \\
-    Learning starts                  & \todo{} & \todo{} \\
+    Hidden layers (actor and critics)        & 2 $\times$ 256, ReLU (actor output: tanh) \\
+    Optimiser, learning rate (actor, critic) & Adam, $10^{-3}$, $10^{-3}$ \\
+    Batch size / replay buffer size          & 256 / $10^5$ (whole history) \\
+    Discount $\gamma$ / target update $\tau$ & 0.99 / 0.005 \\
+    Exploration                              & 10k uniform random steps, then $\mathcal N(0, 0.1^2)$ \\
+    Update-to-data ratio                     & 1 gradient step per environment step \\
+    TD3: policy delay / target noise $\sigma$ / clip $c$ & 2 / 0.2 / 0.5 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -105,27 +97,39 @@ $\todo{T}$ environment steps. Evaluation every $\todo{k}$ steps on $\todo{m}$ ep
 \section{Results}
 \label{sec:results}
 
-\subsection{Performance}
-% Learning curves: x = env steps, y = evaluation return, mean + CI over seeds.
-\begin{figure}[h]
+% Figures are produced by 2_analysis.ipynb into report/figures/
+\newcommand{\fig}[2]{\IfFileExists{figures/#1.pdf}{\includegraphics[width=#2]{#1.pdf}}{\fbox{\parbox[c][3.5cm][c]{#2}{\centering\ttfamily\detokenize{#1}.pdf}}}}
+
+\begin{figure}[t]
   \centering
-  % \includegraphics[width=\linewidth]{learning_curves.pdf}
-  \fbox{\parbox[c][4cm][c]{0.9\linewidth}{\centering learning\_curves.pdf}}
-  \caption{\todo{Evaluation return vs.\ environment steps for the 4 configurations. Mean over $N$ seeds, shaded area: 95\% bootstrap CI.}}
-  \label{fig:curves}
+  \begin{subfigure}[t]{0.49\linewidth}\centering\fig{returns}{\linewidth}\caption{Evaluation return.}\label{fig:curves}\end{subfigure}\hfill
+  \begin{subfigure}[t]{0.49\linewidth}\centering\fig{bias}{\linewidth}\caption{Bias $\delta$ of the critic (\cref{eq:bias}).}\label{fig:bias}\end{subfigure}
+  \caption{Learning curves of the four configurations. Lines: mean over 5 seeds; shaded areas: 95\% bootstrap confidence intervals. \todo{One sentence: what should be retained.}}
+  \label{fig:main}
 \end{figure}
+
+\subsection{Performance}
+\todo{Describe \cref{fig:curves}.}
 
 \subsection{Overestimation bias}
-\begin{figure}[h]
+\todo{Describe \cref{fig:bias}, using \cref{tab:stats}.}
+
+\begin{table}[h]
   \centering
-  % \includegraphics[width=\linewidth]{bias.pdf}
-  \fbox{\parbox[c][4cm][c]{0.9\linewidth}{\centering bias.pdf}}
-  \caption{\todo{Bias $\Delta$ (Eq.~\ref{eq:bias}) vs.\ environment steps.}}
-  \label{fig:bias}
-\end{figure}
+  \small
+  \caption{Final values (mean over 5 seeds of the last 3 evaluations, 95\% bootstrap CI) and pairwise tests between configurations.}
+  \label{tab:stats}
+  \IfFileExists{figures/stats.tex}{\input{figures/stats.tex}}{\todo{stats.tex}}
+\end{table}
 
 \subsection{Bias vs.\ performance}
-\todo{Scatter of final bias vs.\ final return per seed, correlation coefficient.}
+\begin{figure}[h]
+  \centering
+  \fig{bias_vs_return}{0.55\linewidth}
+  \caption{Final bias vs.\ final return, one point per run (20 runs). \todo{What should be retained.}}
+  \label{fig:scatter}
+\end{figure}
+\todo{Describe \cref{fig:scatter}, with the Spearman correlation overall and within each algorithm.}
 
 \section{Discussion}
 \label{sec:discussion}
