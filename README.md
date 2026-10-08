@@ -1,7 +1,6 @@
 # Overestimation bias with DDPG and TD3 on LunarLander
 
-Mini-project 1 of UM5IN872 Reinforcement Learning (M2 MIND, Sorbonne Université),
-Théo Fontaine and Théophile Lahaussois.
+Mini-project 1 of Reinforcement Learning (M2 MIND, Sorbonne Université), Théo Fontaine and Théophile Lahaussois.
 
 Does Layer Normalization in the critic reduce the overestimation bias of DDPG and TD3 on
 `LunarLanderContinuous-v3`, and how does this bias relate to performance? The bias is estimated by
