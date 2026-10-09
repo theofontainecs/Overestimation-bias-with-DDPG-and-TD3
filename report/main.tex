@@ -24,26 +24,25 @@
 \newcommand{\E}{\mathbb{E}}
 \newcommand{\Qphi}{Q_{\phi}}
 \newcommand{\pith}{\pi_{\theta}}
-\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
 
 \title{Overestimation Bias in DDPG and TD3 on LunarLander:\\ the Effect of Layer Normalization}
-\author{Théo Fontaine \and Théophile Lahaussois\\[0.3em]
-  \small Sorbonne Université -- M2 MIND -- UM5IN872 Reinforcement Learning\\
-  \small Code: \url{https://github.com/theofontainecs/Overestimation-bias-with-DDPG-and-TD3}}
+\author{%
+  \begin{tabular}{c}
+    Théo Fontaine \qquad Théophile Lahaussois\\[0.4em]
+    \small Code: \url{https://github.com/theofontainecs/Overestimation-bias-with-DDPG-and-TD3}
+  \end{tabular}}
 \date{October 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-\todo{3--4 sentences: question, setup (DDPG/TD3 $\times$ LayerNorm on LunarLanderContinuous, $N$ seeds), how bias is measured (Q vs.\ Monte Carlo returns), main quantitative findings.}
 This study investigates whether Layer Normalization mitigates or exacerbates the overestimation bias inherent in continuous control algorithms. We evaluate a $2 \times 2$ factorial design (DDPG and TD3, with and without Layer Normalization in the critic) on the LunarLanderContinuous-v3 environment across 5 independent seeds. The overestimation bias is quantified by calculating the mean difference between the critic's Q-value predictions and the true discounted Monte Carlo returns during deterministic policy evaluations. The results show a strong negative correlation between bias and performance; while TD3 successfully bounds overestimation, introducing Layer Normalization into DDPG drastically exacerbates its bias (from $+274.1$ to $+644.8$) and severely degrades final returns.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
-\todo{Motivation: function approximation + max/greedy actor $\Rightarrow$ overestimation \citep{thrun1993issues,fujimoto2018td3}. TD3 counters it with clipped double-Q. Layer Normalization in the critic has been reported to stabilise off-policy learning. Research questions:}
-The combination of function approximation and a deterministic, greedy actor inherently induces an overestimation bias in value estimates. In baseline continuous control algorithms like DDPG, these positive errors accumulate during temporal difference updates and severely degrade policy performance. To mitigate this structural flaw, TD3 employs a clipped double-Q mechanism, taking the minimum of two critics to strictly bound the target. Concurrently, applying Layer Normalization to the critic is frequently used to stabilize gradients and improve off-policy learning. However, the precise impact of this feature-level normalization on the underlying overestimation bias of these algorithms remains poorly understood. Therefore, this study investigates the following research questions:
+The combination of function approximation and a deterministic, greedy actor inherently induces an overestimation bias in value estimates \citep{thrun1993issues,fujimoto2018td3}. In baseline continuous control algorithms like DDPG, these positive errors accumulate during temporal difference updates and severely degrade policy performance. To mitigate this structural flaw, TD3 employs a clipped double-Q mechanism, taking the minimum of two critics to strictly bound the target. Concurrently, applying Layer Normalization to the critic is frequently used to stabilize gradients and improve off-policy learning. However, the precise impact of this feature-level normalization on the underlying overestimation bias of these algorithms remains poorly understood. Therefore, this study investigates the following research questions:
 \begin{itemize}
   \item[\textbf{Q1}] Does Layer Normalization in the critic reduce the overestimation bias of DDPG and TD3?
   \item[\textbf{Q2}] How does the overestimation bias relate to performance (return)?
@@ -106,19 +105,17 @@ positive values meaning overestimation. We do not use the normalised bias of \ci
   \centering
   \begin{subfigure}[t]{0.49\linewidth}\centering\fig{returns}{\linewidth}\caption{Evaluation return.}\label{fig:curves}\end{subfigure}\hfill
   \begin{subfigure}[t]{0.49\linewidth}\centering\fig{bias}{\linewidth}\caption{Bias $\delta$ of the critic (\cref{eq:bias}).}\label{fig:bias}\end{subfigure}
-  \caption{Learning curves of the four configurations. Lines: mean over 5 seeds; shaded areas: 95\% bootstrap confidence intervals. \todo{One sentence: what should be retained.}
+  \caption{Learning curves of the four configurations. Lines: mean over 5 seeds; shaded areas: 95\% bootstrap confidence intervals.
 Layer Normalization drastically exacerbates the overestimation bias and policy collapse of DDPG, whereas TD3 successfully bounds the bias near zero in both configurations.
   }
   \label{fig:main}
 \end{figure}
 
 \subsection{Performance}
-\todo{Describe \cref{fig:curves}.}
 
 As illustrated in \cref{fig:curves}, the baseline DDPG algorithm fails to learn a viable policy, plateauing at a final evaluation return of $-111.0$. Strikingly, the addition of Layer Normalization (LN) to the critic further degrades its performance, pushing the final return down to $-144.1$. In contrast, TD3 demonstrates significantly higher and more stable performance, reaching a final return of $134.6$ and successfully solving the environment in several runs. While the inclusion of LN in TD3 causes a performance drop to $74.2$, it remains vastly superior to the DDPG variants. Overall, the learning curves highlight a clear performance collapse for DDPG, which is only exacerbated by feature-level normalization, whereas TD3 maintains a functional policy throughout training.
 
 \subsection{Overestimation bias}
-\todo{Describe \cref{fig:bias}, using \cref{tab:stats}.}
 The performance collapse observed in DDPG can be directly attributed to an underlying overestimation bias, as depicted in \cref{fig:bias} and quantified in \cref{tab:stats}. The baseline DDPG exhibits a substantial final bias of $+274.1$. Critically, the inclusion of LN significantly exacerbates this phenomenon, pushing the bias to an extreme $+644.8$ ($p = 0.016$, Welch and Mann-Whitney U tests). 
 
 Mathematically, this catastrophic increase is rooted in the optimization dynamics governed by the deterministic policy gradient. When LN is applied to the critic's pre-activations, the backward pass scales the gradients by the inverse of the standard deviation ($\frac{\partial \bar{z}}{\partial z} \propto \frac{1}{\sigma}$). This Jacobian preconditioning provides the actor with a perfectly conditioned optimization landscape. Because the critic's estimate inherently contains statistical approximation errors $\epsilon(s,a)$, the perfectly-conditioned actor rapidly converges toward the absolute artificial peaks $\arg\max_a \epsilon(s,a)$. This maximal positive error is then directly bootstrapped into DDPG's unconstrained Bellman target, triggering a fatal positive feedback loop that inflates the bias.
@@ -129,28 +126,25 @@ Conversely, TD3 maintains a tightly controlled bias near zero ($-7.8$), and the 
   \small
   \caption{Final values (mean over 5 seeds of the last 3 evaluations, 95\% bootstrap CI) and pairwise tests between configurations.}
   \label{tab:stats}
-  \IfFileExists{figures/stats.tex}{\input{figures/stats.tex}}{\todo{stats.tex}}
+  \IfFileExists{figures/stats.tex}{\input{figures/stats.tex}}{}
 \end{table}
 
 \subsection{Bias vs.\ performance}
 \begin{figure}[h]
   \centering
   \fig{bias_vs_return}{0.55\linewidth}
-  \caption{Final bias vs.\ final return, one point per run (20 runs). \todo{What should be retained.}}
+  \caption{Final bias vs.\ final return, one point per run (20 runs).}
   \label{fig:scatter}
 \end{figure}
-\todo{Describe \cref{fig:scatter}, with the Spearman correlation overall and within each algorithm.}
 \cref{fig:scatter} illustrates the direct relationship between the final bias and the final evaluation return across all 20 independent runs. We observe a strong, highly significant negative rank correlation (Spearman $\rho = -0.87$, $p < 0.001$). The scatter plot clearly segregates the algorithms into two distinct clusters: the TD3 runs (with and without LN) are tightly grouped in the top-left quadrant, characterized by high returns and near-zero bias. In stark contrast, the DDPG variants are scattered across the bottom-right quadrant, suffering from severe overestimation and poor performance. This structural segregation confirms empirically that overestimation is not merely a numerical artifact, but the primary driver of policy failure in unconstrained architectures.
 \section{Discussion}
 \label{sec:discussion}
-\todo{Answer Q1 and Q2 with the statistics; limitations (number of seeds, single environment, MC estimate variance).}
 These statistical findings provide clear answers to our initial research questions. Regarding \textbf{Q1}, Layer Normalization does not reduce overestimation bias; rather, it drastically amplifies it in unconstrained architectures like DDPG, while TD3's clipped double-Q mechanism effectively blocks this amplification. Regarding \textbf{Q2}, the strong negative correlation ($\rho = -0.87$) confirms that overestimation bias is not a benign artifact, but a primary driver of policy collapse. 
 
 However, these conclusions are subject to methodological limitations. The empirical evidence relies on a single continuous control task (LunarLanderContinuous) and a restricted sample size (5 seeds per configuration), which limits generalizability to higher-dimensional environments. Furthermore, the reliance on Monte Carlo returns ($G_t$) to estimate the true Q-value introduces high variance into the bias measurement $\delta$ (as defined in \cref{eq:bias}), which may partially noise the evaluation despite the averaging over $N$ pairs.
 
 \section{Conclusion}
 \label{sec:conclusion}
-\todo{2--3 sentences.}
 This study demonstrates that while Layer Normalization is a powerful architectural tool for gradient conditioning, it cannot substitute for fundamental algorithmic safeguards. By providing a perfectly conditioned optimization landscape, LN inadvertently accelerates the exploitation of approximation errors in DDPG, leading to catastrophic overestimation. Consequently, our findings underscore the absolute necessity of structural pessimism—such as TD3's minimum operator—to safely deploy feature-level normalization in continuous deep reinforcement learning.
 
 \bibliographystyle{plainnat}
